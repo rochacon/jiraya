@@ -1,0 +1,255 @@
+#!/Users/rochacon/.local/venvs/jiraya/bin/python2.7
+"""jiraya - Simple Jira CLI.
+
+Usage:
+  jiraya assign <issue> [<username>] [--project=<name>]
+  jiraya backlog [--project=<name>]
+  jiraya comment <issue> <message> [--project=<name>]
+  jiraya comments <issue> [--project=<name>]
+  jiraya doing [--user=<user>] [--project=<name>]
+  jiraya info <issue> [--project=<name>]
+  jiraya move <issue> [<status>] [--project=<name>]
+  jiraya open <issue> [--project=<name>]
+  jiraya review [--project=<name>]
+  jiraya tasks <issue> [--project=<name>]
+  jiraya todo [--project=<name>]
+  jiraya unassign <issue> [--project=<name>]
+  jiraya url <issue>
+  jiraya (-h | --help)
+  jiraya --version
+
+Options:
+  -h --help               Show this screen.
+  --version               Show version.
+  -p --project=<name>     Jira project name. Also configurable with JIRA_DEFAULT_PROJECT environment variable.
+"""
+import collections
+import os
+import sys
+import webbrowser
+
+from docopt import docopt
+from jira.client import JIRA
+
+
+# Disable SSL warnings
+from requests.packages import urllib3
+urllib3.disable_warnings()
+
+
+def _get_assignee_username(issue):
+    if issue.fields.assignee is not None:
+        return issue.fields.assignee.name
+    return '-'
+
+
+def _get_jira_conn(url, username, passwd):
+    return JIRA(url, get_server_info=False,
+                basic_auth=(username, passwd))
+
+
+def main(args):
+    jira_url = os.getenv('JIRA_URL')
+    jira_username = os.getenv('JIRA_USERNAME')
+    jira_password = os.getenv('JIRA_PASSWORD')
+
+    if not any([jira_password, jira_username, jira_url]):
+        print('Please set JIRA_URL, JIRA_USERNAME and JIRA_PASSWORD environment variables.')
+        return 1
+
+    jra = _get_jira_conn(jira_url, jira_username, jira_password)
+
+    if not args.get('--project'):
+        args['--project'] = os.getenv('JIRA_DEFAULT_PROJECT')
+        if not args['--project']:
+            print('Select a project with --project or JIRA_DEFAULT_PROJECT environment variable.')
+            return 1
+
+    if args['assign']:
+        return assign(jra, args)
+
+    if args['backlog']:
+        query = 'status = "Qualified"'
+        return list_issues(jra, args['--project'], query)
+
+    if args['comment']:
+        return post_comment(jra, args)
+
+    if args['comments']:
+        return comment(jra, args)
+
+    if args['doing']:
+        return doing(jra, args)
+
+    if args['info']:
+        return info(jra, args)
+
+    if args['open']:
+        return open_issue(jra, args)
+
+    if args['move']:
+        return move(jra, args)
+
+    if args['review']:
+        query = 'status = "In Review"'
+        return list_issues(jra, args['--project'], query)
+
+    if args['tasks']:
+        return tasks(jra, args)
+
+    if args['todo']:
+        query = 'status = "To Do"'
+        return list_issues(jra, args['--project'], query)
+
+    if args['url']:
+        return url(jra, args)
+
+    return 1
+
+
+def assign(jra, args):
+    username = args['<username>'] or os.getenv('JIRA_USERNAME')
+    jra.assign_issue(args['<issue>'], username)
+    print('Assigned issue {} to {}'.format(args['<issue>'], username))
+
+
+def comment(jra, args):
+    issue = jra.issue(args['<issue>'], fields='comment')
+    print('comments:')
+    for com in issue.fields.comment.comments:
+        print('  - {} at {}: |'.format(com.author, com.created))
+        for line in com.body.splitlines():
+            print('    {}'.format(line))
+        print()
+
+
+def doing(jra, args):
+    jql = 'status = "In Progress" AND project="{}"'.format(args['--project'])
+    if args['--user']:
+        jql += ' AND assignee="{}"'.format(args['--user'])
+    else:
+        jql += ' AND assignee=currentUser()'
+    jql += ' ORDER BY priority DESC,updated DESC'
+    issues = jra.search_issues(jql, maxResults=500)
+    # Map assigned stories
+    stories = collections.OrderedDict()
+    for i in filter(lambda iss: not hasattr(iss.fields, 'parent') or iss.fields.parent is None, issues):
+        stories[i.key] = {'story': i, 'tasks': []}
+    # Map stories that you're only assigned in sub-tasks
+    for i in filter(lambda iss: hasattr(iss.fields, 'parent'), issues):
+        if i.fields.parent.key not in stories:
+            stories[i.fields.parent.key] = {'story': i.fields.parent, 'tasks': []}
+    # Map task list into stories
+    for story_key in stories.keys():
+        stories[story_key]['tasks'] = [t for t in issues if hasattr(t.fields, 'parent') and t.fields.parent.key == story_key]
+    # Display current stories/tasks
+    for story_key in stories.keys():
+        story = stories[story_key]['story']
+        print('- {}: {}'.format(story.key, story.fields.summary))
+        for task in stories[story_key]['tasks']:
+            print('  {}: {}'.format(task.key, task.fields.summary))
+        # print()
+
+
+def info(jra, args):
+    issue = jra.issue(args['<issue>'], fields='assignee,comment,creator,description,issuetype,status,summary')
+    print('author: {}'.format(issue.fields.creator))
+    print('assignee: {}'.format(issue.fields.assignee))
+    print('key: {}'.format(issue.key))
+    print('status: {}'.format(issue.fields.status))
+    print('summary: {}'.format(issue.fields.summary))
+    if issue.fields.description:
+        print('description: |')
+        for line in issue.fields.description.splitlines():
+            print('  {}'.format(line))
+        print()
+    comment(jra, args)
+    tasks(jra, args)
+
+
+def post_comment(jra, args):
+    jra.add_comment(args['<issue>'], args['<message>'])
+    print('Posted comment on {}'.format(args['<issue>']))
+
+
+def open_issue(jra, args):
+    """Open issue in browser
+    """
+    print('Opening issue {}'.format(args['<issue>']))
+    issue = jra.issue(args['<issue>'])
+    webbrowser.open(issue.permalink())
+
+
+def move(jra, args):
+    """Move issue to next status step
+    """
+    available_transitions = jra.transitions(args['<issue>'])
+    transition = args['<status>']
+
+    if len(available_transitions) == 0:
+        print('No next status step.')
+        return 0
+
+    if len(available_transitions) > 1 and transition is None:
+        print('Available transitions:')
+        for trans in available_transitions:
+            print('  - "{}"'.format(trans['name']))
+        return
+
+    if transition is None:
+        next_transition = available_transitions[0]
+    else:
+        next_transition = [t for t in available_transitions if t['name'].lower() == transition.lower()]
+        if len(next_transition) == 0:
+            print('Status not found for: {}'.format(transition))
+            return 1
+        next_transition = next_transition[0]
+
+    jra.transition_issue(args['<issue>'], next_transition['id'])
+    print('Issue moved to {}'.format(next_transition['name']))
+
+
+def tasks(jra, args):
+    issues = jra.search_issues('parent="{0}"'.format(args['<issue>']),
+                               fields='assignee,comment,creator,status'
+                                      ',subtasks,summary')
+    print('tasks:')
+    tasks_by_status = {}
+    for issue in issues:
+        tasks_by_status.setdefault(issue.fields.status.name, []).append(issue)
+
+    statuses = list(set([i.fields.status.name for i in issues]))
+    for status in statuses:
+        print('  - {}:'.format(status))
+        # Skip status if no task found on it
+        if status not in tasks_by_status:
+            continue
+        for task in tasks_by_status[status]:
+            # FIXME(rochacon): get assignee, this requires a request to jra.issue for every task, or using the parent field at the JQL
+            assignee = _get_assignee_username(task)
+            print('    - {}: ({}) {}'.format(task.key, assignee, task.fields.summary))
+
+
+def list_issues(jra, project, query=None):
+    jql = 'project = "{}"'.format(project)
+    if query:
+        jql += ' AND {}'.format(query)
+    issues = jra.search_issues(jql, maxResults=500)
+    for i in issues:
+        assignee = _get_assignee_username(i)
+        print('  - {}: ({}) {}'.format(i.key, assignee, i.fields.summary))
+
+
+def unassign(jra, args):
+    jra.assign_issue(args['<issue>'], None)
+    print('Unassigned issue {}'.format(args['<issue>']))
+
+
+def url(jra, args):
+    issue = jra.issue(args['<issue>'])
+    print(issue.permalink())
+
+
+if __name__ == '__main__':
+    args = docopt(__doc__, version='Jiraya 0.1')
+    sys.exit(main(args))
