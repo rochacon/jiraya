@@ -190,20 +190,17 @@ def move(jra, args):
         print('No next status step.')
         return 0
 
-    if len(available_transitions) > 1 and transition is None:
+    if transition is None:
         print('Available transitions:')
         for trans in available_transitions:
             print('  - "{}"'.format(trans['name']))
         return
 
-    if transition is None:
-        next_transition = available_transitions[0]
-    else:
-        next_transition = [t for t in available_transitions if t['name'].lower() == transition.lower()]
-        if len(next_transition) == 0:
-            print('Status not found for: {}'.format(transition))
-            return 1
-        next_transition = next_transition[0]
+    next_transition = [t for t in available_transitions if t['name'].lower() == transition.lower()]
+    if len(next_transition) == 0:
+        print('Status not found for: {}'.format(transition))
+        return 1
+    next_transition = next_transition[0]
 
     jra.transition_issue(args['<issue>'], next_transition['id'])
     print('Issue moved to {}'.format(next_transition['name']))
