@@ -6,6 +6,6 @@ setup(
     name='jiraya',
     description='Simple Jira Command Line Interface.',
     version='0.1.0',
-    install_requires=open('requirements.txt').readlines(),
+    install_require=open('requirements.txt').readlines(),
     scripts=['jiraya'],
 )
