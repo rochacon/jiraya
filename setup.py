@@ -10,7 +10,7 @@ setup(
     author_email='rochacon@gmail.com',
     url='https://github.com/rochacon/jiraya',
     license='MIT',
-    version='0.1.3',
+    version='0.1.4',
     install_requires=open('requirements.txt').readlines(),
     scripts=['jiraya'],
 )
